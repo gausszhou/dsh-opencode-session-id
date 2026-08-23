@@ -49,6 +49,7 @@ headers: {
 
 为了让网关看到 opencode 同款格式，插件默认用 **SHA-256 把 `session-<uuid>` 确定性映射成 8 字符 nanoid**：
 
+- **只哈希 uuid 部分**：`session-` 前缀（一个常量 label）不参与哈希（`stripSessionPrefix` 先剥离），token 只由 uuid 决定。例：`session-e820d21d-…-a309f722a3bc → 0RpJJnxJ`。
 - 同一个会话 → 恒定 token，跨请求、跨重启不变，后台可稳定归因。
 - token 默认只用**纯字母数字**（`A-Za-z0-9`，62 字符）。62 不是 2 的幂，直接取模会有偏差，故用**拒绝采样**（6 位值 ≥62 跳过再取下一个）保持均匀；SHA-256 块耗尽时以计数器续哈希。
 - 可用 `nanoidAlphabet: "urlsafe"` 回退到经典 64 字符表（含 `_`/`-`）。

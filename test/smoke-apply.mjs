@@ -8,7 +8,7 @@
  *  3. the fetch wrapper is installed on mount and restored on dispose.
  */
 import assert from "node:assert/strict";
-import { apply, nanoidOf } from "../lib/index.js";
+import { apply, nanoidOf, stripSessionPrefix } from "../lib/index.js";
 
 function fakeCtx() {
 	const listeners = new Map();
@@ -93,7 +93,7 @@ const opencodeCalls = calls.filter((c) => String(c.url).includes("opencode.ai"))
 assert.ok(opencodeCalls.length >= 2, "scoped downstream fetch observed");
 const hit = opencodeCalls.at(-1);
 const headers = new Headers(hit.init.headers);
-assert.equal(headers.get("x-session-affinity"), nanoidOf("session-smoke-1"), "fetch inside the scoped stream saw the session id (nanoid-hashed by default)");
+assert.equal(headers.get("x-session-affinity"), nanoidOf(stripSessionPrefix("session-smoke-1")), "fetch inside the scoped stream saw the session id (nanoid(uuid) hashed by default)");
 assert.equal(headers.get("authorization"), "Bearer x", "existing headers preserved");
 assert.notEqual(globalThis.fetch, recorder, "fetch wrapper installed at mount (replaces the current fetch)")
 

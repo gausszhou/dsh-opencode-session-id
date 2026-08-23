@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import assert from "node:assert/strict";
 
-import { DEFAULT_HEADERS, NANOID_ALPHABET, NANOID_ALPHABET_URLSAFE, createSessionScope, installSessionHeaderFetch, matchesTarget, nanoidOf, normalize, withSessionHeaders } from "../lib/index.js";
+import { DEFAULT_HEADERS, NANOID_ALPHABET, NANOID_ALPHABET_URLSAFE, createSessionScope, installSessionHeaderFetch, matchesTarget, nanoidOf, normalize, stripSessionPrefix, withSessionHeaders } from "../lib/index.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DSH_NODE_MODULES = process.env.DSH_NODE_MODULES ?? "/home/gauss/.npm-global/lib/node_modules/@deepseek-ai/dsh/node_modules";
@@ -269,18 +269,28 @@ const ok = (label) => {
 	assert.equal(NANOID_ALPHABET.length, 62, "default alphabet is 62 alphanumeric chars (no symbols)");
 	assert.equal(NANOID_ALPHABET_URLSAFE.length, 64, "urlsafe alphabet is 2^6 chars with _ and -");
 	assert.ok(!NANOID_ALPHABET.includes("_") && !NANOID_ALPHABET.includes("-"), "default alphabet has no _ or -");
-	const token = nanoidOf("session-e820d21d-3ea3-42b1-9f64-a309f722a3bc");
+	const token = nanoidOf("e820d21d-3ea3-42b1-9f64-a309f722a3bc");
 	assert.equal(token.length, 8, "default length is 8, like the opencode web token");
 	for (const ch of token) assert.ok(NANOID_ALPHABET.includes(ch), `char ${ch} in nanoid alphabet`);
 	assert.match(token, /^[A-Za-z0-9]{8}$/, "default token is pure alphanumeric (no _ or -)");
-	assert.equal(nanoidOf("session-e820d21d-3ea3-42b1-9f64-a309f722a3bc"), token, "deterministic: same session → same token");
-	assert.equal(nanoidOf("session-e820d21d-3ea3-42b1-9f64-a309f722a3bc", 8), token, "explicit length 8 matches default");
-	assert.notEqual(nanoidOf("session-11111111-1111-4111-8111-111111111111"), token, "different sessions hash differently");
+	assert.equal(nanoidOf("e820d21d-3ea3-42b1-9f64-a309f722a3bc"), token, "deterministic: same uuid → same token");
+	assert.equal(nanoidOf("e820d21d-3ea3-42b1-9f64-a309f722a3bc", 8), token, "explicit length 8 matches default");
+	assert.notEqual(nanoidOf("11111111-1111-4111-8111-111111111111"), token, "different uuids hash differently");
 	assert.equal(nanoidOf("e820d21d-3ea3-42b1-9f64-a309f722a3bc", 6).length, 6, "custom length respected");
 	const safe = nanoidOf("anything", 8, NANOID_ALPHABET_URLSAFE);
 	assert.equal(safe.length, 8, "urlsafe alphabet also yields 8 chars");
 	assert.match(safe, /^[A-Za-z0-9_-]+$/, "urlsafe option may use _ / -");
 	ok("nanoidOf: sha-256 → stable 8-char opencode-format token (symbol-free by default)");
+}
+
+// ── unit: stripSessionPrefix removes only the session- label ────────────────
+{
+	assert.equal(stripSessionPrefix("session-e820d21d-3ea3-42b1-9f64-a309f722a3bc"), "e820d21d-3ea3-42b1-9f64-a309f722a3bc", "session- prefix stripped");
+	assert.equal(stripSessionPrefix("e820d21d-3ea3-42b1-9f64-a309f722a3bc"), "e820d21d-3ea3-42b1-9f64-a309f722a3bc", "no prefix → unchanged");
+	assert.equal(stripSessionPrefix("session-"), "", "bare session- → empty");
+	assert.equal(nanoidOf(stripSessionPrefix("session-e820d21d-3ea3-42b1-9f64-a309f722a3bc")), nanoidOf("e820d21d-3ea3-42b1-9f64-a309f722a3bc"), "wire token hashes the uuid only, session- not included");
+	assert.notEqual(nanoidOf(stripSessionPrefix("session-e820d21d-3ea3-42b1-9f64-a309f722a3bc")), nanoidOf("session-e820d21d-3ea3-42b1-9f64-a309f722a3bc"), "hashing the label would give a different token");
+	ok("stripSessionPrefix: wire hash excludes the session- label");
 }
 
 // ── integration: nanoid(8) token lands on the wire header (hash mode) ───────
@@ -292,7 +302,8 @@ const ok = (label) => {
 		hosts: ["opencode.ai"],
 		baseURLs: [],
 		headerNames: ["x-opencode-session"],
-		getSessionId: () => nanoidOf("session-test-xyz"),
+		// Same as wireSessionId in apply(): strip the prefix, then hash.
+		getSessionId: () => nanoidOf(stripSessionPrefix("session-test-xyz")),
 	});
 	try {
 		await scope.run("session-test-xyz", async () => {
@@ -300,9 +311,9 @@ const ok = (label) => {
 		});
 		const hit = records.find((r) => String(r.url).includes("opencode.ai"));
 		const headers = new Headers(hit.init.headers);
-		assert.equal(headers.get("x-opencode-session"), nanoidOf("session-test-xyz"));
+		assert.equal(headers.get("x-opencode-session"), nanoidOf("test-xyz"));
 		assert.equal(String(headers.get("x-opencode-session")).length, 8);
-		ok("wire carries the hashed nanoid(8) token in x-opencode-session");
+		ok("wire carries the hashed nanoid(8) token in x-opencode-session (uuid only)");
 	} finally {
 		restore();
 	}

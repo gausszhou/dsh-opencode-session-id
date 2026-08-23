@@ -10,7 +10,7 @@ DeepSeek Harness (dsh) 插件：当你使用 **opencode 模型**（`opencode` / 
 dsh plugin --profile web add "@gausszhou/dsh-opencode-session-id"
 ```
 
-装完后 **重启 dsh web**（`systemctl --user restart dsh-web`）让 bundle 生效。默认配置即可工作：请求 `opencode.ai` 时自动带上 **`x-opencode-session`**（opencode 网关同款会话头）以及 `x-session-affinity` / `x-client-request-id` / `x-session-id`。**头值默认是会话 id 的纯字母数字 nanoid(8)**（如 `EBVDZEzE`，由 `session-<uuid>` 经 SHA-256 确定性导出）；`verbose: true` 时 journal 里同时打印原始 id 与 wire token 的映射：
+装完后 **重启 dsh web**（`systemctl --user restart dsh-web`）让 bundle 生效。默认配置即可工作：请求 `opencode.ai` 时自动带上 **`x-opencode-session`**（opencode 网关同款会话头）以及 `x-session-affinity` / `x-client-request-id` / `x-session-id`。**头值默认是会话 id 里 uuid 部分的纯字母数字 nanoid(8)**（如 `0RpJJnxJ`，`session-` 前缀不参与哈希，由 uuid 经 SHA-256 确定性导出）；`verbose: true` 时 journal 里同时打印原始 id 与 wire token 的映射：
 
 ```bash
 journalctl --user -u dsh-web -f | grep opencode-session-id
@@ -18,7 +18,7 @@ journalctl --user -u dsh-web -f | grep opencode-session-id
 
 ## 实现
 
-opencode 网关分支用 `x-opencode-session` 承载会话 id；本插件监听 `llm/stream` 作用域、包装 fetch 在 wire 层补上该头，并默认把 `session-<uuid>` 哈希成纯字母数字 nanoid(8) 上线。**只改请求头**，请求体 / URL / 方法等一律透传。原理细节见 [docs/design.md](docs/design.md)。
+opencode 网关分支用 `x-opencode-session` 承载会话 id；本插件监听 `llm/stream` 作用域、包装 fetch 在 wire 层补上该头，并默认把 `session-<uuid>` 里 uuid 部分（`session-` 前缀不参与）哈希成纯字母数字 nanoid(8) 上线。**只改请求头**，请求体 / URL / 方法等一律透传。原理细节见 [docs/design.md](docs/design.md)。
 
 ## 配置
 
@@ -61,4 +61,4 @@ verify.mjs 用 dsh CLI 内置的真实 pi-ai 发出 opencode-go 请求，断言 
 
 - session id 取 `options.sessionId`（agent-loop 已按会话填好）；无会话上下文时兜底 `sessionIdEnv` > `DSH_SESSION_ID`（web 部署下是该进程的启动会话）> 进程内随机 id。
 - 覆盖 `openai-completions` / `openai-responses` / `anthropic-messages` 等走 fetch 的协议；`transport: websocket` 不走 fetch，不在覆盖范围。
-- 全局 fetch 包装只在命中 opencode 端点时追加请求头，不做任何其它改动。wire token 是 `session-<uuid>` 的 SHA-256 单向哈希（如 `EBVDZEzE`），后台无法反推原 id；换 `nanoidAlphabet` / `nanoidLength` 配置后 token 会整体变化，旧记录不再关联。
+- 全局 fetch 包装只在命中 opencode 端点时追加请求头，不做任何其它改动。wire token 是 `session-<uuid>` 中 uuid 部分的 SHA-256 单向哈希（不含 `session-` 前缀，如 `0RpJJnxJ`），后台无法反推原 id；换 `nanoidAlphabet` / `nanoidLength` 配置后 token 会整体变化，旧记录不再关联。
