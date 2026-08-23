@@ -1,28 +1,30 @@
 # dsh-opencode-session-id
 
-DeepSeek Harness (dsh) 插件：当你使用 **opencode 模型**（`opencode` / `opencode-go` 等指向 opencode.ai 网关的 provider）时，让**实际发出的 HTTP 请求携带 session id**——与 opencode 客户端自身的携带方式一致。
+A [DeepSeek Harness](https://github.com/deepseek-ai/dsh) (dsh) plugin: when you use an **opencode model** (providers such as `opencode` / `opencode-go` that point at the opencode.ai gateway), it makes the **actual outgoing HTTP requests carry a session id** — the same way the opencode client itself does.
 
-## 使用方法
+> 中文版说明见 [README.zh-CN.md](README.zh-CN.md)。
 
-将插件加进 dsh profile（发布为 npm 包后按包名安装）：
+## Usage
+
+Add the plugin to a dsh profile (install by package name once published to npm):
 
 ```bash
 dsh plugin --profile web add "@gausszhou/dsh-opencode-session-id"
 ```
 
-装完后 **重启 dsh web**（`systemctl --user restart dsh-web`）让 bundle 生效。默认配置即可工作：请求 `opencode.ai` 时自动带上 **`x-opencode-session`**（opencode 网关同款会话头）以及 `x-session-affinity` / `x-client-request-id` / `x-session-id`。**头值默认是会话 id 里 uuid 部分的纯字母数字 nanoid(8)**（如 `0RpJJnxJ`，`session-` 前缀不参与哈希，由 uuid 经 SHA-256 确定性导出）；`verbose: true` 时 journal 里同时打印原始 id 与 wire token 的映射：
+After installing, **restart dsh web** (`systemctl --user restart dsh-web`) so the bundle takes effect. The default configuration works out of the box: requests to `opencode.ai` automatically get **`x-opencode-session`** (the session header used by the opencode gateway) plus `x-session-affinity` / `x-client-request-id` / `x-session-id`. **The header value defaults to a pure-alphanumeric nanoid(8) derived from the uuid portion of the session id** (e.g. `0RpJJnxJ` — the `session-` prefix does not participate in the hash; the token is deterministically derived from the uuid via SHA-256). With `verbose: true`, the journal logs the mapping between the original id and the wire token:
 
 ```bash
 journalctl --user -u dsh-web -f | grep opencode-session-id
 ```
 
-## 实现
+## How it works
 
-opencode 网关分支用 `x-opencode-session` 承载会话 id；本插件监听 `llm/stream` 作用域、包装 fetch 在 wire 层补上该头，并默认把 `session-<uuid>` 里 uuid 部分（`session-` 前缀不参与）哈希成纯字母数字 nanoid(8) 上线。**只改请求头**，请求体 / URL / 方法等一律透传。原理细节见 [docs/design.md](docs/design.md)。
+The opencode gateway branch uses `x-opencode-session` to carry the session id; this plugin listens on the `llm/stream` scope, wraps `fetch`, and adds that header at the wire layer. By default it hashes the uuid portion of `session-<uuid>` (the `session-` prefix is excluded) into an alphanumeric nanoid(8) before it goes on the wire. **Only request headers are touched** — the request body, URL, method, and everything else pass through unchanged. See [docs/design.md](docs/design.md) for the full design rationale.
 
-## 配置
+## Configuration
 
-**默认零配置即可用**（上面的安装方式即可）。想开注入日志，patch 层只需：
+**Zero configuration needed by default** (the install command above is all you need). To enable injection logging through the patch layer:
 
 ```yaml
 - id: opencode-session-id
@@ -30,35 +32,35 @@ opencode 网关分支用 `x-opencode-session` 承载会话 id；本插件监听 
     verbose: true
 ```
 
-全部可选项（均可省略，用默认值）：
+All options (each optional, defaults shown):
 
-| 键 | 默认 | 说明 |
+| Key | Default | Description |
 |---|---|---|
-| `providers` | `[opencode, opencode-go]` | 要打标 sessionId 的 llm-pi-ai 路由名 |
-| `hosts` | `[opencode.ai]` | 注入会话头的 URL host 后缀（含子域） |
-| `baseURLs` | `[]` | 额外精确匹配的 URL 前缀（自定义网关） |
-| `headers` | `[x-opencode-session, x-session-affinity, x-client-request-id, x-session-id]` | 注入的请求头名 |
-| `extraHeaders` | `{}` | 可选静态附加头（如 opencode 指纹族 `x-opencode-client: native` / `x-opencode-request: dsh`） |
-| `userAgent` | 空 | 覆写 `User-Agent`（opencode 自身发 `opencode/<版本>`；默认不动） |
-| `sessionIdEnv` | 空 | 兜底 session id 的环境变量名 |
-| `verbose` | `false` | 打印每次注入（含原 id → wire token 映射） |
-| `seedSessionId` | `false` | 给 opencode 路由补种 `options.sessionId` |
-| `nanoidSessionId` | `true` | 把 `session-<uuid>` 哈希成 nanoid(8) 再上线；`false` 发原始 id |
-| `nanoidLength` | `8` | token 长度（4–32） |
-| `nanoidAlphabet` | `alphanumeric` | `alphanumeric`（纯 `A-Za-z0-9`，无 `_`/`-`）或 `urlsafe`（经典 64 字符表） |
-| `disableFetchInjection` | `false` | `true` 时只保留 waterfall 会话作用域 |
+| `providers` | `[opencode, opencode-go]` | llm-pi-ai route names whose sessionId should be tagged |
+| `hosts` | `[opencode.ai]` | URL host suffixes (including subdomains) that get session headers |
+| `baseURLs` | `[]` | Additional exact URL prefixes to match (custom gateways) |
+| `headers` | `[x-opencode-session, x-session-affinity, x-client-request-id, x-session-id]` | Request header names to inject |
+| `extraHeaders` | `{}` | Optional static extra headers (e.g. opencode fingerprint family `x-opencode-client: native` / `x-opencode-request: dsh`) |
+| `userAgent` | empty | Override `User-Agent` (opencode itself sends `opencode/<version>`; untouched by default) |
+| `sessionIdEnv` | empty | Environment variable name to fall back on for the session id |
+| `verbose` | `false` | Log every injection (including the original id → wire token mapping) |
+| `seedSessionId` | `false` | Seed `options.sessionId` for opencode routes |
+| `nanoidSessionId` | `true` | Hash `session-<uuid>` to a nanoid(8) before sending; `false` sends the raw id |
+| `nanoidLength` | `8` | Token length (4–32) |
+| `nanoidAlphabet` | `alphanumeric` | `alphanumeric` (pure `A-Za-z0-9`, no `_`/`-`) or `urlsafe` (classic 64-character set) |
+| `disableFetchInjection` | `false` | When `true`, keep only the waterfall session scoping |
 
-## 验证
+## Verification
 
 ```bash
-node test/verify.mjs   # 10 项：单测 + 真实 pi-ai wire 请求 + 并发隔离 + 只改请求头保证
-node test/smoke-apply.mjs  # apply() 接线：监听器注册、作用域化 fetch、mount/dispose 生命周期
+node test/verify.mjs   # 10 checks: unit tests + real pi-ai wire request + concurrent isolation + headers-only guarantee
+node test/smoke-apply.mjs  # apply() wiring: listener registration, scoped fetch, mount/dispose lifecycle
 ```
 
-verify.mjs 用 dsh CLI 内置的真实 pi-ai 发出 opencode-go 请求，断言 wire 请求头里确实带上了 session id；另验证并发会话隔离、非 opencode 端点不受影响。
+`verify.mjs` fires a real `opencode-go` request through the pi-ai bundled with the dsh CLI, asserting that the wire request headers really carry the session id; it also verifies concurrent-session isolation and that non-opencode endpoints are unaffected.
 
-## 说明与限制
+## Notes & limitations
 
-- session id 取 `options.sessionId`（agent-loop 已按会话填好）；无会话上下文时兜底 `sessionIdEnv` > `DSH_SESSION_ID`（web 部署下是该进程的启动会话）> 进程内随机 id。
-- 覆盖 `openai-completions` / `openai-responses` / `anthropic-messages` 等走 fetch 的协议；`transport: websocket` 不走 fetch，不在覆盖范围。
-- 全局 fetch 包装只在命中 opencode 端点时追加请求头，不做任何其它改动。wire token 是 `session-<uuid>` 中 uuid 部分的 SHA-256 单向哈希（不含 `session-` 前缀，如 `0RpJJnxJ`），后台无法反推原 id；换 `nanoidAlphabet` / `nanoidLength` 配置后 token 会整体变化，旧记录不再关联。
+- The session id comes from `options.sessionId` (agent-loop fills it in per session); without a session context, the fallback chain is `sessionIdEnv` > `DSH_SESSION_ID` (the process's startup session in web deployments) > an in-process random id.
+- Covers protocols that go through `fetch`, such as `openai-completions` / `openai-responses` / `anthropic-messages`; `transport: websocket` does not use fetch and is out of scope.
+- The global fetch wrapper only appends request headers when an opencode endpoint is matched — nothing else is changed. The wire token is a one-way SHA-256 hash of the uuid portion of `session-<uuid>` (the `session-` prefix excluded, e.g. `0RpJJnxJ`), so the backend cannot reverse it to the original id; changing `nanoidAlphabet` / `nanoidLength` changes every token, breaking association with old records.
