@@ -26,7 +26,9 @@ headers: {
 }
 ```
 
-**结论**：对 opencode 网关，会话 ID 走 **`x-opencode-session`**（外加 `x-opencode-client` / `x-opencode-request` / `x-opencode-project` 和 `User-Agent: opencode/<版本>` 指纹头）；`x-session-affinity` / `X-Session-Id` 是 opencode 对普通 OpenAI 兼容端点才用的。opencode 原生会话 id 是 nanoid 风格（如 `QBgzdhtO`），我们发的是 dsh 会话 id `session-<uuid>`——网关按字符串原样记录，发送 `x-opencode-session` 后后台即可按该值归因会话。
+**结论**：对 opencode 网关，会话 ID 走 **`x-opencode-session`**（外加 `x-opencode-client` / `x-opencode-request` / `x-opencode-project` 和 `User-Agent: opencode/<版本>` 指纹头）；`x-session-affinity` / `X-Session-Id` 是 opencode 对普通 OpenAI 兼容端点才用的。opencode 原生会话 id 是 nanoid 风格（如 `QBgzdhtO`）。
+
+**我们发什么**：dsh 侧会话 id 是 `session-<uuid>`。为了让网关看到 opencode 同款格式，插件默认用 **SHA-256 把 `session-<uuid>` 确定性映射成 nanoid(8)**（同一个会话 → 恒定 token，跨请求、跨重启不变，后台可稳定归因）。例：`session-e820d21d-…-a309f722a3bc → EBV_DZEz`。可配 `nanoidSessionId: false` 改发原始 `session-<uuid>`。
 
 （另外，pi-ai 库内部还有一套 `sendSessionAffinityHeaders` 门控的 affinity 头发射逻辑——默认关，且 dsh 的 `llm-pi-ai` 配置门控刻意 withheld 了该开关，这正是为什么 dsh 已有 `options.sessionId` 却发不出任何会话头。）
 
@@ -49,7 +51,7 @@ dsh plugin --profile web add "link:/home/gauss/Code/gausszhou/dsh-opencode-sid"
 dsh plugin --profile web add "@gausszhou/dsh-opencode-session-id"
 ```
 
-装完后 **重启 dsh web**（`systemctl --user restart dsh-web`）让 bundle 生效。默认配置即可工作：请求 `opencode.ai` 时自动带上 **`x-opencode-session`**（opencode 网关同款会话头）以及 `x-session-affinity` / `x-client-request-id` / `x-session-id`（值 = dsh 会话 id，形如 `session-<uuid>`）。journal 里可见每次注入：
+装完后 **重启 dsh web**（`systemctl --user restart dsh-web`）让 bundle 生效。默认配置即可工作：请求 `opencode.ai` 时自动带上 **`x-opencode-session`**（opencode 网关同款会话头）以及 `x-session-affinity` / `x-client-request-id` / `x-session-id`。**头值默认是会话 id 的 nanoid(8) 哈希**（如 `EBV_DZEz`，由 `session-<uuid>` 经 SHA-256 确定性导出）；`verbose: true` 时 journal 里同时打印原始 id 与 wire token 的映射：
 
 ```bash
 journalctl --user -u dsh-web -f | grep opencode-session-id
@@ -73,8 +75,12 @@ patch 层（profile 的 `cordis.patch.yml` 或 bundle 自带，见 `cordis.patch
     userAgent: ''                         # 可选：覆写 User-Agent（opencode 自身发
                                           #   `opencode/<版本>`；设为空则不动）
     sessionIdEnv: ''                      # 可选：兜底 session id 的环境变量名
-    verbose: false                        # 打印每次注入
+    verbose: false                        # 打印每次注入（含原 id → wire token 映射）
     seedSessionId: false                  # 可选：给 opencode 路由补种 options.sessionId
+    nanoidSessionId: true                 # 默认把 session-<uuid> SHA-256 哈希成
+                                          #   opencode 风格的 nanoid(8) 再上线；
+                                          #   false = 直接发原始 session-<uuid>
+    nanoidLength: 8                       # 哈希 token 长度（4–32，默认 8）
     disableFetchInjection: false          # true 时只保 waterfall 会话作用域
 ```
 

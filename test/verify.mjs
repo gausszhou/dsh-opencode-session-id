@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import assert from "node:assert/strict";
 
-import { DEFAULT_HEADERS, createSessionScope, installSessionHeaderFetch, matchesTarget, normalize, withSessionHeaders } from "../lib/index.js";
+import { DEFAULT_HEADERS, NANOID_ALPHABET, createSessionScope, installSessionHeaderFetch, matchesTarget, nanoidOf, normalize, withSessionHeaders } from "../lib/index.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DSH_NODE_MODULES = process.env.DSH_NODE_MODULES ?? "/home/gauss/.npm-global/lib/node_modules/@deepseek-ai/dsh/node_modules";
@@ -264,6 +264,45 @@ const ok = (label) => {
 	ok("Request input: body/method preserved, headers only replaced");
 }
 
+// ── unit: nanoidOf hashes session ids deterministically into nanoid(8) ─────
+{
+	assert.equal(NANOID_ALPHABET.length, 64, "alphabet is 2^6 chars");
+	const token = nanoidOf("session-e820d21d-3ea3-42b1-9f64-a309f722a3bc");
+	assert.equal(token.length, 8, "default length is 8, like the opencode web token");
+	for (const ch of token) assert.ok(NANOID_ALPHABET.includes(ch), `char ${ch} in nanoid alphabet`);
+	assert.equal(nanoidOf("session-e820d21d-3ea3-42b1-9f64-a309f722a3bc"), token, "deterministic: same session → same token");
+	assert.equal(nanoidOf("session-e820d21d-3ea3-42b1-9f64-a309f722a3bc", 8), token, "explicit length 8 matches default");
+	assert.notEqual(nanoidOf("session-11111111-1111-4111-8111-111111111111"), token, "different sessions hash differently");
+	assert.equal(nanoidOf("e820d21d-3ea3-42b1-9f64-a309f722a3bc", 6).length, 6, "custom length respected");
+	assert.match(nanoidOf("anything"), /^[A-Za-z0-9_-]+$/, "token is really nanoid alphabet");
+	ok("nanoidOf: sha-256 → stable 8-char opencode-format token");
+}
+
+// ── integration: nanoid(8) token lands on the wire header (hash mode) ───────
+{
+	const records = [];
+	const scope = createSessionScope();
+	globalThis.fetch = recordingFetch(records);
+	const restore = installSessionHeaderFetch({
+		hosts: ["opencode.ai"],
+		baseURLs: [],
+		headerNames: ["x-opencode-session"],
+		getSessionId: () => nanoidOf("session-test-xyz"),
+	});
+	try {
+		await scope.run("session-test-xyz", async () => {
+			await globalThis.fetch("https://opencode.ai/zen/go/v1/chat/completions", { method: "POST", body: "{}" });
+		});
+		const hit = records.find((r) => String(r.url).includes("opencode.ai"));
+		const headers = new Headers(hit.init.headers);
+		assert.equal(headers.get("x-opencode-session"), nanoidOf("session-test-xyz"));
+		assert.equal(String(headers.get("x-opencode-session")).length, 8);
+		ok("wire carries the hashed nanoid(8) token in x-opencode-session");
+	} finally {
+		restore();
+	}
+}
+
 // ── config normalization ────────────────────────────────────────────────────
 {
 	const cfg = normalize({});
@@ -278,6 +317,11 @@ const ok = (label) => {
 	assert.equal(tight.sessionIdEnv, "MY_SID");
 	assert.deepEqual(tight.extraHeaders, { "x-opencode-client": "native" }, "invalid extra header names dropped");
 	assert.equal(tight.userAgent, "opencode/1.18.21");
+	assert.equal(cfg.nanoidSessionId, true, "nanoid hashing on by default");
+	assert.equal(cfg.nanoidLength, 8, "default token length 8");
+	assert.equal(normalize({ nanoidSessionId: false }).nanoidSessionId, false, "opt-out keeps raw session id");
+	assert.equal(normalize({ nanoidLength: 21 }).nanoidLength, 21, "custom token length respected");
+	assert.equal(normalize({ nanoidLength: 0 }).nanoidLength, 8, "out-of-range length falls back to 8");
 	ok("normalize applies defaults and sanitizes input");
 }
 
