@@ -1,0 +1,43 @@
+{
+  "name": "@gausszhou/dsh-opencode-session-id",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "lib/index.js",
+  "description": "Attach the dsh conversation session id to LLM HTTP requests made to opencode providers (the opencode.ai gateway), matching how opencode itself carries session ids (x-session-affinity / x-client-request-id / x-session-id).",
+  "license": "MIT",
+  "author": "gausszhou",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gausszhou/dsh-opencode-sid.git"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "opencode",
+    "session-id",
+    "session-affinity",
+    "cordis",
+    "plugin"
+  ],
+  "engines": {
+    "node": ">=20.3"
+  },
+  "scripts": {
+    "test": "node test/verify.mjs && node test/smoke-apply.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "cordis.patch.yml"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  }
+}

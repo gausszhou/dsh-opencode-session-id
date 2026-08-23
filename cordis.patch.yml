@@ -1,0 +1,24 @@
+# dsh-opencode-session-id — attach the dsh session id to opencode requests
+#
+# One insert over the empty profile root. The plugin listens on the
+# `llm/stream` waterfall (the harness's official LLM request interception
+# seam) to scope every streamed call to its conversation session id, and
+# injects session-id headers onto the actual HTTP requests that are sent to
+# opencode endpoints (host suffix "opencode.ai" by default).
+#
+# Provider routes are matched by name (llm-pi-ai route keys); header
+# injection is matched by URL host. Both are configurable:
+#
+#   - id: opencode-session-id
+#     name: '@gausszhou/dsh-opencode-session-id'
+#     config:
+#       providers: [opencode, opencode-go]     # llm-pi-ai routes to tag
+#       hosts: [opencode.ai]                    # URL host suffix to inject into
+#       baseURLs: []                            # exact URL prefixes (extra targets)
+#       headers: [x-session-affinity, x-client-request-id, x-session-id]
+#       sessionIdEnv: ''                        # env fallback for the id
+#       verbose: false
+
+- insert:
+    - id: opencode-session-id
+      name: '@gausszhou/dsh-opencode-session-id'
