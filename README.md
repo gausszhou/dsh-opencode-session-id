@@ -16,44 +16,9 @@ dsh plugin --profile web add "@gausszhou/dsh-opencode-session-id"
 journalctl --user -u dsh-web -f | grep opencode-session-id
 ```
 
-## opencode 是怎么携带 session id 的（结论，取自 opencode 1.18.21 源码）
+## 实现
 
-opencode 构建 LLM 请求头时按 provider 分成两个分支（`providerID` 以 `opencode` 开头 → 网关分支）：
-
-```js
-headers: {
-  ...(model.providerID.startsWith("opencode")
-    ? {
-        ...(projectId ? { "x-opencode-project": projectId } : {}),
-        "x-opencode-session": sessionID,     // ← 网关分支：会话 ID 在这个头里
-        "x-opencode-request": user.id,
-        "x-opencode-client": flags.client,
-        "User-Agent": `opencode/${version}`, // ← 指纹 UA
-      }
-    : {
-        "x-session-affinity": sessionID,     // ← 非 opencode provider 才是这套
-        "X-Session-Id": sessionID,
-        ...(parentSessionID ? { "x-parent-session-id": parentSessionID } : {}),
-        "User-Agent": `opencode/${version}`,
-      }),
-  ...model.headers,
-}
-```
-
-**结论**：对 opencode 网关，会话 ID 走 **`x-opencode-session`**（外加 `x-opencode-client` / `x-opencode-request` / `x-opencode-project` 和 `User-Agent: opencode/<版本>` 指纹头）；`x-session-affinity` / `X-Session-Id` 是 opencode 对普通 OpenAI 兼容端点才用的。opencode 原生会话 id 是 nanoid 风格（如 `QBgzdhtO`）。
-
-**我们发什么**：dsh 侧会话 id 是 `session-<uuid>`。为了让网关看到 opencode 同款格式，插件默认用 **SHA-256 把 `session-<uuid>` 确定性映射成 8 字符 nanoid**（同一个会话 → 恒定 token，跨请求、跨重启不变，后台可稳定归因）。例：`session-e820d21d-…-a309f722a3bc → EBVDZEzE`。token **默认只用纯字母数字**（`A-Za-z0-9`，拒绝采样保证均匀，避开 `_`/`-`，防止后台正则只认字母数字时漏掉）；如需经典 nanoid 64 字符表（含 `_`/`-`）可配 `nanoidAlphabet: urlsafe`。设 `nanoidSessionId: false` 改发原始 `session-<uuid>`。
-
-（另外，pi-ai 库内部还有一套 `sendSessionAffinityHeaders` 门控的 affinity 头发射逻辑——默认关，且 dsh 的 `llm-pi-ai` 配置门控刻意 withheld 了该开关，这正是为什么 dsh 已有 `options.sessionId` 却发不出任何会话头。）
-
-**dsh 侧的现状**：`dsh-agent-loop` 把会话 id 放进 `options.sessionId`，`llm-pi-ai` 也会转发给 pi-ai；但 adapter 丢弃逐请求的 `options.headers`（只用 provider 静态 `headers` + attribution 头），且 compat 门控关着——所以实际请求头里什么都没有。本插件在**不可能被绕过的层**（实际 fetch）补上这一环。
-
-## 工作原理
-
-1. **`llm/stream` waterfall 监听**（dsh 官方 LLM 请求拦截点）：把每个流式调用用 `AsyncLocalStorage` 绑定到它的会话 id——多个会话并发流式时每个请求也能拿到**自己的** session id。
-2. **包装 `globalThis.fetch`**：Node ≥ 18 下 `openai` SDK 和 `@anthropic-ai/sdk` 解析到的都是 undici 全局 fetch（SDK 在每次请求构造客户端时才解析 `fetch`，包装必然生效）。包装器只对命中 opencode 端点（host 后缀，或精确 baseURL 前缀，均可配置）的请求**追加会话请求头**，其余请求以完全相同的参数原样透传。
-
-**范围保证——只改请求头。** 包装器不读、不改、不替换请求体（字节与流原样透传），不改 URL/method/signal/duplex/凭证等任何 fetch 选项，也不碰响应。`llm/stream` 监听器默认不改调用选项。
+opencode 网关分支用 `x-opencode-session` 承载会话 id；本插件监听 `llm/stream` 作用域、包装 fetch 在 wire 层补上该头，并默认把 `session-<uuid>` 哈希成纯字母数字 nanoid(8) 上线。**只改请求头**，请求体 / URL / 方法等一律透传。原理细节见 [docs/design.md](docs/design.md)。
 
 ## 配置
 
@@ -96,5 +61,4 @@ verify.mjs 用 dsh CLI 内置的真实 pi-ai 发出 opencode-go 请求，断言 
 
 - session id 取 `options.sessionId`（agent-loop 已按会话填好）；无会话上下文时兜底 `sessionIdEnv` > `DSH_SESSION_ID`（web 部署下是该进程的启动会话）> 进程内随机 id。
 - 覆盖 `openai-completions` / `openai-responses` / `anthropic-messages` 等走 fetch 的协议；`transport: websocket` 不走 fetch，不在覆盖范围。
-- 全局 fetch 包装只在命中 opencode 端点时追加请求头，不做任何其它改动。
-- wire token 是 SHA-256 单向哈希：后台只能看到 `EBVDZEzE` 这类 token，无法反推出原始 `session-<uuid>`；dsh 侧靠 verbose 日志里的 `→ wire` 映射回溯会话。换 `nanoidAlphabet` / `nanoidLength` 配置后 token 会整体变化（旧记录不再关联）。
+- 全局 fetch 包装只在命中 opencode 端点时追加请求头，不做任何其它改动。wire token 是 `session-<uuid>` 的 SHA-256 单向哈希（如 `EBVDZEzE`），后台无法反推原 id；换 `nanoidAlphabet` / `nanoidLength` 配置后 token 会整体变化，旧记录不再关联。
