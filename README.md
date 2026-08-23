@@ -1,10 +1,10 @@
 # dsh-opencode-session-id
 
-**dsh session IDs for opencode, zero config.**
+> dsh session IDs for opencode, zero config.
+
+**English** | [简体中文](./README.zh-CN.md)
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/dsh) (dsh) plugin: when you use an **opencode model** (providers such as `opencode` / `opencode-go` that point at the opencode.ai gateway), it makes the **actual outgoing HTTP requests carry a session id** — the same way the opencode client itself does.
-
-> **English** | [简体中文](./README.zh-CN.md)
 
 ## Usage
 
