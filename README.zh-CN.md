@@ -2,6 +2,8 @@
 
 [English](./README.md) | **简体中文**
 
+**dsh session IDs for opencode, zero config.** — dsh 会话 ID 直达 opencode，零配置。
+
 DeepSeek Harness (dsh) 插件：当你使用 **opencode 模型**（`opencode` / `opencode-go` 等指向 opencode.ai 网关的 provider）时，让**实际发出的 HTTP 请求携带 session id**——与 opencode 客户端自身的携带方式一致。
 
 ## 使用方法
