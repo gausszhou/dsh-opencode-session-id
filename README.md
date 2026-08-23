@@ -2,7 +2,7 @@
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/dsh) (dsh) plugin: when you use an **opencode model** (providers such as `opencode` / `opencode-go` that point at the opencode.ai gateway), it makes the **actual outgoing HTTP requests carry a session id** — the same way the opencode client itself does.
 
-> 中文版说明见 [README.zh-CN.md](README.zh-CN.md)。
+> **English** | [简体中文](./README.zh-CN.md)
 
 ## Usage
 
