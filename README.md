@@ -2,32 +2,42 @@
 
 DeepSeek Harness (dsh) 插件：当你使用 **opencode 模型**（`opencode` / `opencode-go` 等指向 opencode.ai 网关的 provider）时，让**实际发出的 HTTP 请求携带 session id**——与 opencode 客户端自身的携带方式一致。
 
-## opencode 是怎么携带 session id 的（对比）
+## opencode 是怎么携带 session id 的（结论，取自 opencode 1.18.21 源码）
 
-opencode 的 AI 请求层就是 [@earendil-works/pi-ai](https://www.npmjs.com/package/@earendil-works/pi-ai)，而 dsh 的 `llm-pi-ai` adapter 用的正是同一个库。opencode 的做法：
+opencode 构建 LLM 请求头时按 provider 分成两个分支（`providerID` 以 `opencode` 开头 → 网关分支）：
 
-1. 把当前会话 id 写进 provider 调用选项的 `sessionId` 字段；
-2. 底层 OpenAI 兼容客户端在**每个 wire 请求**上额外发送：
+```js
+headers: {
+  ...(model.providerID.startsWith("opencode")
+    ? {
+        ...(projectId ? { "x-opencode-project": projectId } : {}),
+        "x-opencode-session": sessionID,     // ← 网关分支：会话 ID 在这个头里
+        "x-opencode-request": user.id,
+        "x-opencode-client": flags.client,
+        "User-Agent": `opencode/${version}`, // ← 指纹 UA
+      }
+    : {
+        "x-session-affinity": sessionID,     // ← 非 opencode provider 才是这套
+        "X-Session-Id": sessionID,
+        ...(parentSessionID ? { "x-parent-session-id": parentSessionID } : {}),
+        "User-Agent": `opencode/${version}`,
+      }),
+  ...model.headers,
+}
+```
 
-| 场景 | 请求头 |
-| --- | --- |
-| 默认（OpenAI 兼容） | `x-session-affinity` + `x-client-request-id`（值 = session id） |
-| `sessionAffinityFormat: openai` | 上面两个，另加 `session_id` |
-| OpenRouter 风格 | `x-session-id` |
+**结论**：对 opencode 网关，会话 ID 走 **`x-opencode-session`**（外加 `x-opencode-client` / `x-opencode-request` / `x-opencode-project` 和 `User-Agent: opencode/<版本>` 指纹头）；`x-session-affinity` / `X-Session-Id` 是 opencode 对普通 OpenAI 兼容端点才用的。opencode 原生会话 id 是 nanoid 风格（如 `QBgzdhtO`），我们发的是 dsh 会话 id `session-<uuid>`——网关按字符串原样记录，发送 `x-opencode-session` 后后台即可按该值归因会话。
 
-这套发射逻辑由模型的 `compat.sendSessionAffinityHeaders` 开关门控（默认关）。
+（另外，pi-ai 库内部还有一套 `sendSessionAffinityHeaders` 门控的 affinity 头发射逻辑——默认关，且 dsh 的 `llm-pi-ai` 配置门控刻意 withheld 了该开关，这正是为什么 dsh 已有 `options.sessionId` 却发不出任何会话头。）
 
-**dsh 侧的现状**：`dsh-agent-loop` 已经把会话 id 放进 `options.sessionId`，`llm-pi-ai` 也会把它转发给 pi-ai；但有两道墙让它在实际请求上「出不来」：
-
-- `llm-pi-ai` 的 compat 门控**刻意 withheld** 了 `sendSessionAffinityHeaders` / `sessionAffinityFormat`，配置文件写不进去；
-- adapter 丢弃逐请求的 `options.headers`，只发送 provider profile 里的静态 `headers` + attribution 头。
-
-所以即使 dsh 已有 sessionId，请求头里也什么都没有。本插件在**不可能被绕过的层**（实际 fetch）补上这一环。
+**dsh 侧的现状**：`dsh-agent-loop` 把会话 id 放进 `options.sessionId`，`llm-pi-ai` 也会转发给 pi-ai；但 adapter 丢弃逐请求的 `options.headers`（只用 provider 静态 `headers` + attribution 头），且 compat 门控关着——所以实际请求头里什么都没有。本插件在**不可能被绕过的层**（实际 fetch）补上这一环。
 
 ## 工作原理
 
-1. **`llm/stream` waterfall 监听**（dsh 官方 LLM 请求拦截点）：把每个流式调用用 `AsyncLocalStorage` 绑定到它的会话 id——多个会话并发流式时每个请求也能拿到**自己的** session id；对配置里的 opencode provider，若调用方没带 `options.sessionId` 则补上（同时喂给 pi-ai 原生 affinity 路径）。
-2. **包装 `globalThis.fetch`**：Node ≥ 18 下 `openai` SDK 和 `@anthropic-ai/sdk` 都解析到 undici 的全局 fetch。包装器只对命中 opencode 端点（host 后缀，或精确 baseURL 前缀，均可配置）的请求**追加 session-id 请求头**，其余请求原样透传。请求本身（method/body/signal/duplex/凭证）完全不变。
+1. **`llm/stream` waterfall 监听**（dsh 官方 LLM 请求拦截点）：把每个流式调用用 `AsyncLocalStorage` 绑定到它的会话 id——多个会话并发流式时每个请求也能拿到**自己的** session id。
+2. **包装 `globalThis.fetch`**：Node ≥ 18 下 `openai` SDK 和 `@anthropic-ai/sdk` 解析到的都是 undici 全局 fetch（SDK 在每次请求构造客户端时才解析 `fetch`，包装必然生效）。包装器只对命中 opencode 端点（host 后缀，或精确 baseURL 前缀，均可配置）的请求**追加会话请求头**，其余请求以完全相同的参数原样透传。
+
+**范围保证——只改请求头。** 包装器不读、不改、不替换请求体（字节与流原样透传），不改 URL/method/signal/duplex/凭证等任何 fetch 选项，也不碰响应。`llm/stream` 监听器默认不改调用选项。
 
 ## 安装
 
@@ -39,7 +49,11 @@ dsh plugin --profile web add "link:/home/gauss/Code/gausszhou/dsh-opencode-sid"
 dsh plugin --profile web add "@gausszhou/dsh-opencode-session-id"
 ```
 
-装完后 **重启 dsh web**（`systemctl --user restart dsh-web`）让 bundle 生效。默认配置即可工作：请求 `opencode.ai` 时自动带上 `x-session-affinity` / `x-client-request-id` / `x-session-id`（值 = dsh 会话 id，形如 `session-<uuid>`）。
+装完后 **重启 dsh web**（`systemctl --user restart dsh-web`）让 bundle 生效。默认配置即可工作：请求 `opencode.ai` 时自动带上 **`x-opencode-session`**（opencode 网关同款会话头）以及 `x-session-affinity` / `x-client-request-id` / `x-session-id`（值 = dsh 会话 id，形如 `session-<uuid>`）。journal 里可见每次注入：
+
+```bash
+journalctl --user -u dsh-web -f | grep opencode-session-id
+```
 
 ## 配置
 
@@ -52,10 +66,16 @@ patch 层（profile 的 `cordis.patch.yml` 或 bundle 自带，见 `cordis.patch
     providers: [opencode, opencode-go]   # 要打标 sessionId 的 llm-pi-ai 路由名
     hosts: [opencode.ai]                  # 注入会话头的 URL host 后缀（含子域）
     baseURLs: []                          # 额外精确匹配的 URL 前缀（自定义网关）
-    headers: [x-session-affinity, x-client-request-id, x-session-id]
+    headers: [x-opencode-session, x-session-affinity, x-client-request-id, x-session-id]
+    extraHeaders: {}                      # 可选：静态附加请求头（如 opencode 指纹族）
+                                          #   x-opencode-client: native
+                                          #   x-opencode-request: dsh
+    userAgent: ''                         # 可选：覆写 User-Agent（opencode 自身发
+                                          #   `opencode/<版本>`；设为空则不动）
     sessionIdEnv: ''                      # 可选：兜底 session id 的环境变量名
     verbose: false                        # 打印每次注入
-    disableFetchInjection: false          # true 时只保 waterfall 的 sessionId 补种
+    seedSessionId: false                  # 可选：给 opencode 路由补种 options.sessionId
+    disableFetchInjection: false          # true 时只保 waterfall 会话作用域
 ```
 
 ## 验证

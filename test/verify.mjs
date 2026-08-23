@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import assert from "node:assert/strict";
 
-import { createSessionScope, installSessionHeaderFetch, matchesTarget, normalize, withSessionHeaders } from "../lib/index.js";
+import { DEFAULT_HEADERS, createSessionScope, installSessionHeaderFetch, matchesTarget, normalize, withSessionHeaders } from "../lib/index.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DSH_NODE_MODULES = process.env.DSH_NODE_MODULES ?? "/home/gauss/.npm-global/lib/node_modules/@deepseek-ai/dsh/node_modules";
@@ -87,16 +87,17 @@ const ok = (label) => {
 	ok("matchesTarget host/baseURL filtering");
 }
 
-// ── unit: withSessionHeaders ────────────────────────────────────────────────
+// ── unit: withSessionHeaders merges extras and user-agent, headers only ────
 {
-	const names = ["x-session-affinity", "x-client-request-id"];
+	const names = ["x-opencode-session"];
 	const merged = withSessionHeaders("https://opencode.ai/v1/chat/completions", {
 		method: "POST",
 		headers: { authorization: "Bearer abc" },
 		body: "{}",
-	}, names, "session-unit");
-	assert.equal(merged.init.headers.get("x-session-affinity"), "session-unit");
-	assert.equal(merged.init.headers.get("x-client-request-id"), "session-unit");
+	}, names, "session-unit", { "x-opencode-client": "native" }, "opencode/test");
+	assert.equal(merged.init.headers.get("x-opencode-session"), "session-unit");
+	assert.equal(merged.init.headers.get("x-opencode-client"), "native");
+	assert.equal(merged.init.headers.get("user-agent"), "opencode/test");
 	assert.equal(merged.init.headers.get("authorization"), "Bearer abc");
 	assert.equal(merged.init.method, "POST");
 	assert.equal(merged.init.body, "{}");
@@ -104,10 +105,10 @@ const ok = (label) => {
 	const req = new Request("https://opencode.ai/v1/chat/completions", { method: "POST", body: "{}", headers: { authorization: "Bearer abc" } });
 	const rebuilt = withSessionHeaders(req, undefined, names, "session-req");
 	assert.ok(rebuilt.input instanceof Request);
-	assert.equal(rebuilt.input.headers.get("x-session-affinity"), "session-req");
+	assert.equal(rebuilt.input.headers.get("x-opencode-session"), "session-req");
 	assert.equal(rebuilt.input.headers.get("authorization"), "Bearer abc");
 	assert.equal(rebuilt.init, undefined);
-	ok("withSessionHeaders preserves method/body/auth");
+	ok("withSessionHeaders preserves method/body/auth; adds session + extras + UA");
 }
 
 // ── integration: the real pi-ai wire request carries the session id ────────
@@ -202,14 +203,15 @@ const ok = (label) => {
 	const controller = new AbortController();
 	await opencodeChat(createSessionScope(), "session-ignored", controller.signal);
 	controller.abort();
-	// Wrapped runner: pi-ai through installSessionHeaderFetch.
+	// Wrapped runner: pi-ai through installSessionHeaderFetch with the shipped
+	// default header set (which leads with opencode's own x-opencode-session).
 	const records = [];
 	const scope = createSessionScope();
 	globalThis.fetch = recordingFetch(records);
 	const restore = installSessionHeaderFetch({
 		hosts: ["opencode.ai"],
 		baseURLs: [],
-		headerNames: ["x-session-affinity", "x-client-request-id", "x-session-id"],
+		headerNames: DEFAULT_HEADERS,
 		getSessionId: () => scope.current(),
 	});
 	try {
@@ -226,10 +228,10 @@ const ok = (label) => {
 	assert.equal(changed.url, base.url, "URL unchanged");
 	assert.equal(changed.init.method, base.init.method, "method unchanged");
 	assert.equal(String(changed.init.body), String(base.init.body), "request body bytes unchanged");
-	// Header delta is exactly the three injected session headers.
+	// Header delta is exactly the injected session headers.
 	const baseHeaders = new Headers(base.init.headers);
 	const changedHeaders = new Headers(changed.init.headers);
-	const injected = new Set(["x-session-affinity", "x-client-request-id", "x-session-id"]);
+	const injected = new Set(DEFAULT_HEADERS);
 	const baseNames = new Set([...baseHeaders.keys()]);
 	const changedNames = new Set([...changedHeaders.keys()]);
 	for (const name of baseNames) {
@@ -238,8 +240,10 @@ const ok = (label) => {
 	for (const name of changedNames) {
 		assert.ok(baseNames.has(name) || injected.has(name), `only session headers added (saw ${name})`);
 	}
+	assert.equal(changedHeaders.get("x-opencode-session"), "session-delta");
 	assert.equal(changedHeaders.get("x-session-affinity"), "session-delta");
 	assert.ok(changed.init.signal instanceof AbortSignal, "signal untouched (still the SDK's controller)");
+	assert.ok(injected.has("x-opencode-session"), "default set leads with x-opencode-session (opencode gateway convention)");
 	ok("headers-only guarantee: same url/method/body; delta is exactly the session headers");
 }
 
@@ -264,13 +268,16 @@ const ok = (label) => {
 {
 	const cfg = normalize({});
 	assert.deepEqual(cfg.providers, ["opencode", "opencode-go"]);
+	assert.equal(cfg.headers[0], "x-opencode-session", "default leads with opencode's own session header");
 	assert.ok(cfg.headers.includes("x-session-affinity"));
-	const tight = normalize({ providers: ["opencode-go"], hosts: ["opencode.ai", ".OC.ai"], headers: ["X-Session-Affinity", "bad header!"], baseURLs: ["https://gw/v1"], sessionIdEnv: "MY_SID", verbose: true });
+	const tight = normalize({ providers: ["opencode-go"], hosts: ["opencode.ai", ".OC.ai"], headers: ["X-Session-Affinity", "bad header!"], baseURLs: ["https://gw/v1"], sessionIdEnv: "MY_SID", verbose: true, extraHeaders: { "x-opencode-client": "native", "bad name!": "x" }, userAgent: "opencode/1.18.21" });
 	assert.deepEqual(tight.providers, ["opencode-go"]);
 	assert.deepEqual(tight.hosts, ["opencode.ai", ".OC.ai"]);
 	assert.deepEqual(tight.headers, ["X-Session-Affinity"], "invalid header names dropped, case kept");
 	assert.deepEqual(tight.baseURLs, ["https://gw/v1"]);
 	assert.equal(tight.sessionIdEnv, "MY_SID");
+	assert.deepEqual(tight.extraHeaders, { "x-opencode-client": "native" }, "invalid extra header names dropped");
+	assert.equal(tight.userAgent, "opencode/1.18.21");
 	ok("normalize applies defaults and sanitizes input");
 }
 
