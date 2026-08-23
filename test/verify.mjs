@@ -193,6 +193,73 @@ const ok = (label) => {
 	}
 }
 
+// ── headers-only guarantee: a matched request differs from the untouched
+// ── control ONLY by the session headers (same url/method/body bytes) ───────
+{
+	// Control runner: pi-ai without our wrapper.
+	const control = [];
+	globalThis.fetch = recordingFetch(control);
+	const controller = new AbortController();
+	await opencodeChat(createSessionScope(), "session-ignored", controller.signal);
+	controller.abort();
+	// Wrapped runner: pi-ai through installSessionHeaderFetch.
+	const records = [];
+	const scope = createSessionScope();
+	globalThis.fetch = recordingFetch(records);
+	const restore = installSessionHeaderFetch({
+		hosts: ["opencode.ai"],
+		baseURLs: [],
+		headerNames: ["x-session-affinity", "x-client-request-id", "x-session-id"],
+		getSessionId: () => scope.current(),
+	});
+	try {
+		const wrappedController = new AbortController();
+		await opencodeChat(scope, "session-delta", wrappedController.signal);
+		wrappedController.abort();
+	} finally {
+		restore();
+	}
+	const base = control.find((r) => String(r.url).includes("opencode.ai"));
+	const changed = records.find((r) => String(r.url).includes("opencode.ai"));
+	assert.ok(base && changed, "both control and wrapped requests observed");
+	// URL, method, and body bytes are identical.
+	assert.equal(changed.url, base.url, "URL unchanged");
+	assert.equal(changed.init.method, base.init.method, "method unchanged");
+	assert.equal(String(changed.init.body), String(base.init.body), "request body bytes unchanged");
+	// Header delta is exactly the three injected session headers.
+	const baseHeaders = new Headers(base.init.headers);
+	const changedHeaders = new Headers(changed.init.headers);
+	const injected = new Set(["x-session-affinity", "x-client-request-id", "x-session-id"]);
+	const baseNames = new Set([...baseHeaders.keys()]);
+	const changedNames = new Set([...changedHeaders.keys()]);
+	for (const name of baseNames) {
+		assert.equal(changedHeaders.get(name), baseHeaders.get(name), `unrelated header ${name} unchanged`);
+	}
+	for (const name of changedNames) {
+		assert.ok(baseNames.has(name) || injected.has(name), `only session headers added (saw ${name})`);
+	}
+	assert.equal(changedHeaders.get("x-session-affinity"), "session-delta");
+	assert.ok(changed.init.signal instanceof AbortSignal, "signal untouched (still the SDK's controller)");
+	ok("headers-only guarantee: same url/method/body; delta is exactly the session headers");
+}
+
+// ── unit: Request input survives with identical body, only headers replaced ─
+{
+	const body = JSON.stringify({ role: "user", content: "x" });
+	const req = new Request("https://opencode.ai/v1/chat/completions", {
+		method: "POST",
+		body,
+		headers: { authorization: "Bearer abc", "content-type": "application/json" },
+	});
+	const rebuilt = withSessionHeaders(req, undefined, ["x-session-affinity"], "session-req2");
+	assert.ok(rebuilt.input instanceof Request);
+	assert.equal(rebuilt.input.method, "POST");
+	assert.equal(rebuilt.input.headers.get("x-session-affinity"), "session-req2");
+	assert.equal(rebuilt.input.headers.get("authorization"), "Bearer abc");
+	assert.equal(await rebuilt.input.text(), body, "body bytes identical through Request rebuild");
+	ok("Request input: body/method preserved, headers only replaced");
+}
+
 // ── config normalization ────────────────────────────────────────────────────
 {
 	const cfg = normalize({});

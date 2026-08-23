@@ -50,21 +50,48 @@ apply(ctx, {});
 assert.ok(ctx.events.has("llm/stream"), "llm/stream listener registered");
 const listener = ctx.events.get("llm/stream");
 
-// Downstream: an async generator that performs a fetch inside its body.
-const downstream = (async function* () {
+// Downstream factory: an async generator that performs a fetch inside its body.
+const makeDownstream = () => (async function* () {
 	await globalThis.fetch("https://opencode.ai/zen/go/v1/chat/completions", { method: "POST", headers: { authorization: "Bearer x" } });
 	yield { type: "finish", reason: { kind: "stop" } };
 })();
 
+// Default wiring must NOT mutate call options (headers-only guarantee): an
+// opencode-go call without options.sessionId stays untouched in the options.
+const bareOptions = { provider: "opencode-go", model: "deepseek-v4-flash", messages: [] };
+const bareScoped = listener(bareOptions, () => makeDownstream());
+{
+	const it = bareScoped[Symbol.asyncIterator]();
+	await it.next();
+	await it.return?.();
+}
+assert.equal(bareOptions.sessionId, undefined, "default: options.sessionId is NOT seeded (only headers change)");
+
+// With seedSessionId: true the missing option IS filled.
+{
+	const ctx2 = fakeCtx();
+	apply(ctx2, { seedSessionId: true });
+	const listener2 = ctx2.events.get("llm/stream");
+	const opts = { provider: "opencode-go", model: "deepseek-v4-flash", messages: [] };
+	const scoped2 = listener2(opts, () => makeDownstream());
+	const it2 = scoped2[Symbol.asyncIterator]();
+	await it2.next();
+	await it2.return?.();
+	assert.equal(typeof opts.sessionId, "string", "seedSessionId:true fills options.sessionId");
+	ctx2._lateDispose();
+	assert.notEqual(globalThis.fetch, recorder, "second mount dispose restored the first (outer) wrapper");
+}
+
 // Dispatch the waterfall listener the way the harness does: listener(options, next)
-const scoped = listener({ provider: "opencode-go", model: "deepseek-v4-flash", sessionId: "session-smoke-1", messages: [] }, () => downstream);
+const scoped = listener({ provider: "opencode-go", model: "deepseek-v4-flash", sessionId: "session-smoke-1", messages: [] }, () => makeDownstream());
 const iterator = scoped[Symbol.asyncIterator]();
 const first = await iterator.next();
 assert.deepEqual(first.value, { type: "finish", reason: { kind: "stop" } });
 await iterator.return?.();
 
-const hit = calls.find((c) => String(c.url).includes("opencode.ai"));
-assert.ok(hit, "downstream fetch observed");
+const opencodeCalls = calls.filter((c) => String(c.url).includes("opencode.ai"));
+assert.ok(opencodeCalls.length >= 2, "scoped downstream fetch observed");
+const hit = opencodeCalls.at(-1);
 const headers = new Headers(hit.init.headers);
 assert.equal(headers.get("x-session-affinity"), "session-smoke-1", "fetch inside the scoped stream saw the session id");
 assert.equal(headers.get("authorization"), "Bearer x", "existing headers preserved");
