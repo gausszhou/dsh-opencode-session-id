@@ -57,32 +57,31 @@ headers: {
 
 ## 配置
 
-patch 层（profile 的 `cordis.patch.yml` 或 bundle 自带，见 `cordis.patch.yml`）里按需调整：
+**默认零配置即可用**（上面的安装方式即可）。想开注入日志，patch 层只需：
 
 ```yaml
 - id: opencode-session-id
-  name: '@gausszhou/dsh-opencode-session-id'
   config:
-    providers: [opencode, opencode-go]   # 要打标 sessionId 的 llm-pi-ai 路由名
-    hosts: [opencode.ai]                  # 注入会话头的 URL host 后缀（含子域）
-    baseURLs: []                          # 额外精确匹配的 URL 前缀（自定义网关）
-    headers: [x-opencode-session, x-session-affinity, x-client-request-id, x-session-id]
-    extraHeaders: {}                      # 可选：静态附加请求头（如 opencode 指纹族）
-                                          #   x-opencode-client: native
-                                          #   x-opencode-request: dsh
-    userAgent: ''                         # 可选：覆写 User-Agent（opencode 自身发
-                                          #   `opencode/<版本>`；设为空则不动）
-    sessionIdEnv: ''                      # 可选：兜底 session id 的环境变量名
-    verbose: false                        # 打印每次注入（含原 id → wire token 映射）
-    seedSessionId: false                  # 可选：给 opencode 路由补种 options.sessionId
-    nanoidSessionId: true                 # 默认把 session-<uuid> SHA-256 哈希成
-                                          #   opencode 风格的 nanoid(8) 再上线；
-                                          #   false = 直接发原始 session-<uuid>
-    nanoidLength: 8                       # 哈希 token 长度（4–32，默认 8）
-    nanoidAlphabet: alphanumeric          # alphanumeric（默认，纯 A-Za-z0-9，
-                                          #   无 _ / -）或 urlsafe（经典 64 字符表）
-    disableFetchInjection: false          # true 时只保 waterfall 会话作用域
+    verbose: true
 ```
+
+全部可选项（均可省略，用默认值）：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `providers` | `[opencode, opencode-go]` | 要打标 sessionId 的 llm-pi-ai 路由名 |
+| `hosts` | `[opencode.ai]` | 注入会话头的 URL host 后缀（含子域） |
+| `baseURLs` | `[]` | 额外精确匹配的 URL 前缀（自定义网关） |
+| `headers` | `[x-opencode-session, x-session-affinity, x-client-request-id, x-session-id]` | 注入的请求头名 |
+| `extraHeaders` | `{}` | 可选静态附加头（如 opencode 指纹族 `x-opencode-client: native` / `x-opencode-request: dsh`） |
+| `userAgent` | 空 | 覆写 `User-Agent`（opencode 自身发 `opencode/<版本>`；默认不动） |
+| `sessionIdEnv` | 空 | 兜底 session id 的环境变量名 |
+| `verbose` | `false` | 打印每次注入（含原 id → wire token 映射） |
+| `seedSessionId` | `false` | 给 opencode 路由补种 `options.sessionId` |
+| `nanoidSessionId` | `true` | 把 `session-<uuid>` 哈希成 nanoid(8) 再上线；`false` 发原始 id |
+| `nanoidLength` | `8` | token 长度（4–32） |
+| `nanoidAlphabet` | `alphanumeric` | `alphanumeric`（纯 `A-Za-z0-9`，无 `_`/`-`）或 `urlsafe`（经典 64 字符表） |
+| `disableFetchInjection` | `false` | `true` 时只保留 waterfall 会话作用域 |
 
 ## 验证
 
