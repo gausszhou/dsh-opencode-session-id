@@ -29,7 +29,7 @@
     "node": ">=20.3"
   },
   "scripts": {
-    "test": "node test/verify.mjs && node test/smoke-apply.mjs"
+    "test": "node test/verify.mjs && node test/smoke-apply.mjs && node test/stdout-hygiene.mjs"
   },
   "dsh": {
     "bundle": {
