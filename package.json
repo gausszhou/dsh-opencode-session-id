@@ -8,7 +8,7 @@
   "author": "gausszhou",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gausszhou/dsh-opencode-sid.git"
+    "url": "git+https://github.com/gausszhou/dsh-opencode-session-id.git"
   },
   "files": [
     "lib",
